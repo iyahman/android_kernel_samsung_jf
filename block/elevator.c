@@ -814,10 +814,10 @@ void elv_completed_request(struct request_queue *q, struct request *rq)
 {
 	struct elevator_queue *e = q->elevator;
 
-	if (test_bit(REQ_ATOM_URGENT, &rq->atomic_flags)) {
+	if (rq->cmd_flags & REQ_URGENT) {
 		q->notified_urgent = false;
+		WARN_ON(!q->dispatched_urgent);
 		q->dispatched_urgent = false;
-		blk_clear_rq_urgent(rq);
 	}
 	/*
 	 * request is released from the driver, io must be done
@@ -893,6 +893,8 @@ int __elv_register_queue(struct request_queue *q, struct elevator_queue *e)
 		}
 		kobject_uevent(&e->kobj, KOBJ_ADD);
 		e->registered = 1;
+		if (e->type->ops.elevator_registered_fn)
+			e->type->ops.elevator_registered_fn(q);
 	}
 	return error;
 }
