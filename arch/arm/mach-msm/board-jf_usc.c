@@ -146,10 +146,6 @@
 #include <mach/fusion3-thermistor.h>
 #endif
 
-#ifdef CONFIG_KEXEC_HARDBOOT
-#include <asm/kexec.h>
-#endif
-
 #if defined(CONFIG_SENSORS_SSP)
 enum {
 	SNS_PWR_OFF,
@@ -211,6 +207,10 @@ static void sensor_power_on_vdd(int, int);
 #define PCIE_WAKE_N_PMIC_GPIO 12
 #define PCIE_PWR_EN_PMIC_GPIO 13
 #define PCIE_RST_N_PMIC_MPP 1
+
+#ifdef CONFIG_CPU_FREQ_GOV_INTELLIDEMAND  
+int id_set_two_phase_freq(int cpufreq); 
+#endif 
 
 
 static int sec_tsp_synaptics_mode;
@@ -992,23 +992,8 @@ static void __init reserve_ion_memory(void)
 }
 
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
-static char bootreason[128] = {0,};
-int __init device_boot_reason(char *s)
-{
-	int n;
-
-	if (*s == '=')
-		s++;
-	n = snprintf(bootreason, sizeof(bootreason),
-		 "Boot info:\n"
-		 "Last boot reason: %s\n", s);
-	bootreason[n] = '\0';
-	return 1;
-}
-__setup("bootreason", device_boot_reason);
-
 static struct ram_console_platform_data ram_console_pdata = {
-	.bootinfo = bootreason,
+	.bootinfo = NULL,
 };
 
 static struct platform_device ram_console_device = {
@@ -1025,15 +1010,7 @@ static struct platform_device ram_console_device = {
 static struct persistent_ram_descriptor per_ram_descs[] __initdata = {
        {
                .name = "ram_console",
-#ifdef CONFIG_KEXEC_HARDBOOT
-               .size = KEXEC_HB_PAGE_ADDR - RAMCONSOLE_PHYS_ADDR,
-       },
-       {
-               .name = "kexec_hb_page",
-               .size = SZ_1M - (KEXEC_HB_PAGE_ADDR - RAMCONSOLE_PHYS_ADDR),
-#else
                .size = SZ_1M,
-#endif
        }
 };
 
@@ -1259,6 +1236,7 @@ static void __init apq8064_reserve(void)
 static void __init apq8064_early_reserve(void)
 {
 	reserve_info = &apq8064_reserve_info;
+
 }
 #ifdef CONFIG_USB_EHCI_MSM_HSIC
 /* Bandwidth requests (zero) if no vote placed */
@@ -1578,7 +1556,7 @@ struct sii8240_platform_data sii8240_pdata = {
 	.power = sii8240_hw_onoff,
 	.hw_reset = sii8240_hw_reset,
 	.gpio_cfg = mhl_gpio_config,
-	.swing_level = 0x36,
+	.swing_level = 0x2E,
 	.vbus_present = muic77693_mhl_cb,
 };
 
@@ -3977,9 +3955,6 @@ static struct platform_device *common_devices[] __initdata = {
 	&apq8064_device_hsusb_host,
 	&android_usb_device,
 	&msm_device_wcnss_wlan,
-#if defined(CONFIG_MACH_JACTIVE_ATT) || defined(CONFIG_MACH_JACTIVE_EUR)
-	&apq8064_device_qup_spi_gsbi5,
-#endif	
 	&msm_device_iris_fm,
 	&apq8064_fmem_device,
 #ifdef CONFIG_ANDROID_PMEM
@@ -4126,6 +4101,7 @@ static struct platform_device *cdp_devices[] __initdata = {
 #ifdef CONFIG_MSM_ROTATOR
 	&msm_rotator_device,
 #endif
+	&msm8064_pc_cntr,
 	&msm8064_cpu_slp_status,
 	&sec_device_jack,
 #ifdef CONFIG_SENSORS_SSP_C12SD
@@ -5242,39 +5218,9 @@ static void __init apq8064ab_update_retention_spm(void)
 	}
 }
 
-#ifdef CONFIG_SERIAL_MSM_HS
-static struct msm_serial_hs_platform_data apq8064_uartdm_gsbi4_pdata = {
-	.config_gpio	= 4,
-	.uart_tx_gpio	= 10,
-	.uart_rx_gpio	= 11,
-	.uart_cts_gpio	= 12,
-	.uart_rfr_gpio	= 13,
-};
-#else
-static struct msm_serial_hs_platform_data apq8064_uartdm_gsbi4_pdata;
-#endif
-
-static void __init apq8064ab_update_retention_spm(void)
-{
-	int i;
-
-	/* Update the SPM sequences for krait retention on all cores */
-	for (i = 0; i < ARRAY_SIZE(msm_spm_data); i++) {
-		int j;
-		struct msm_spm_platform_data *pdata = &msm_spm_data[i];
-		for (j = 0; j < pdata->num_modes; j++) {
-			if (pdata->modes[j].cmd ==
-					spm_retention_cmd_sequence)
-				pdata->modes[j].cmd =
-				spm_retention_with_krait_v3_cmd_sequence;
-		}
-	}
-}
-
 static void __init apq8064_common_init(void)
 {
 	u32 platform_version = socinfo_get_platform_version();
-
 #ifdef CONFIG_KEYBOARD_CYPRESS_TOUCH_236
 	int ret;
 #endif
@@ -5287,12 +5233,11 @@ static void __init apq8064_common_init(void)
 	if (cpu_is_apq8064ab())
 		apq8064ab_update_krait_spm();
 	if (cpu_is_krait_v3()) {
-		struct msm_pm_init_data_type *pdata =
-				msm8064_pm_8x60.dev.platform_data;
-		pdata->retention_calls_tz = false;
+		msm_pm_set_tz_retention_flag(0);
 		apq8064ab_update_retention_spm();
+	} else {
+		msm_pm_set_tz_retention_flag(1);
 	}
-	platform_device_register(&msm8064_pm_8x60);
 	msm_spm_init(msm_spm_data, ARRAY_SIZE(msm_spm_data));
 	msm_spm_l2_init(msm_spm_l2_data);
 	msm_tsens_early_init(&apq_tsens_pdata);
@@ -5352,12 +5297,6 @@ static void __init apq8064_common_init(void)
 		}
 	}
 
-		/* Add GSBI4 I2C Device for non-fusion3 platform */
-		if (socinfo_get_platform_subtype() !=
-				PLATFORM_SUBTYPE_SGLTE2) {
-			platform_device_register(&apq8064_device_qup_i2c_gsbi4);
-		}
-	}
 #ifdef CONFIG_KEYBOARD_CYPRESS_TOUCH_236
 		if (system_rev < 10)
 			platform_device_register(&touchkey_i2c_gpio_device);
@@ -5441,8 +5380,10 @@ static void __init apq8064_common_init(void)
 	if (!poweroff_charging) {
 		if (sec_tsp_synaptics_mode)
 			S5000_tsp_input_init(lcd_tsp_panel_version);
+#if defined(CONFIG_TOUCHSCREEN_ATMEL_MXTS)
 		else
 			mxt540s_tsp_input_init();
+#endif
 		}
 #endif
 
@@ -5535,7 +5476,6 @@ static void __init samsung_jf_init(void)
 #ifdef CONFIG_MSM_CAMERA
 	apq8064_init_cam();
 #endif
-
 	if (machine_is_mpq8064_hrd() || machine_is_mpq8064_dtv()) {
 #ifdef CONFIG_SERIAL_MSM_HS
 		/* GSBI6(2) - UARTDM_RX */
@@ -5550,6 +5490,9 @@ static void __init samsung_jf_init(void)
 	clear_ssp_gpio();
 	sensor_power_on_vdd(SNS_PWR_ON, SNS_PWR_ON);
 	initialize_ssp_gpio();
+#endif
+#ifdef CONFIG_CPU_FREQ_GOV_INTELLIDEMAND
+	id_set_two_phase_freq(1566000);
 #endif
 #ifdef CONFIG_MACH_JF
 	platform_device_register(&gpio_kp_pdev);
